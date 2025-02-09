@@ -22,6 +22,6 @@ A small Python package for generating spatial configurations and solving integra
 Clone the repository and install the package in editable mode:
 
 ```bash
-git clone <repository_url>
-cd <repository_directory>
+git clone git@github.com:ZachAJohnson/CorrelatedConfigurations.git
+cd CorrelatedConfigurations
 pip install -e .
