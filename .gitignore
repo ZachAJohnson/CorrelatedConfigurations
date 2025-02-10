@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 data/*
+examples/PoissonDisk.ipynb
 
 __pycache__/
 *.py[cod]
