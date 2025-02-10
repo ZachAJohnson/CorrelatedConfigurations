@@ -1,4 +1,4 @@
-# ConfigurationGeneration
+# CorrelatedConfigurations
 
 A small Python package for generating spatial configurations and solving integral equation theory (IET) problems in systems with Yukawa (and similar) interactions. The package is designed for researchers and developers working on simulation and analysis of complex fluids or plasmas.
 
