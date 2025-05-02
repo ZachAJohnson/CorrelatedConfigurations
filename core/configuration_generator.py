@@ -296,3 +296,150 @@ class SubCell():
         return atom_pos
 
 
+def random_reject(total_num_ptcls, box_length, r_reject, rnd_gen = np.random.default_rng()):
+    """
+    Place particles with rejection sampling using linked cell list for efficiency.
+    
+    Parameters
+    ----------
+    total_num_ptcls : int
+        Total number of particles to place
+    r_reject : float 
+        Rejection radius
+    box_length: numpy.ndarray
+        Box length of particle box
+    rnd_gen : numpy.random.Generator
+        Random number generator
+        
+    Returns
+    -------
+    pos_temp : numpy.ndarray
+        Array of placed particle positions
+    """
+    
+    # Initialize positions array
+    pos_temp = np.zeros((total_num_ptcls, 3))
+    
+    # Set up cell list
+    cell_size = r_reject
+    box_lengths = np.array([box_length] * 3)
+    ncells = (box_lengths / cell_size).astype(np.int32)
+    ncells = np.maximum(ncells, np.ones(3, dtype=np.int32))
+    
+    # Initialize cell list arrays
+    head = -np.ones(ncells[0] * ncells[1] * ncells[2], dtype=np.int32)
+    list_next = -np.ones(total_num_ptcls, dtype=np.int32)
+    
+    # Place first particle
+    for dim in range(3):
+        pos_temp[0, dim] = rnd_gen.uniform(0, box_lengths[dim])
+    
+    # Add first particle to cell list
+    cell_idx = get_cell_index(pos_temp[0], cell_size, ncells)
+    head[cell_idx] = 0
+    
+    # Place remaining particles
+    for i in range(1, total_num_ptcls):
+        while True:
+            # Sample new position
+            pos_new = np.zeros(3)
+            for d in range(3):
+                pos_new[d] = rnd_gen.uniform(0, box_lengths[d])
+            
+            # Get cell index for new position
+            cell_idx = get_cell_index(pos_new, cell_size, ncells)
+            
+            # Check neighboring cells
+            reject = False
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    for dz in range(-1, 2):
+                        neigh_cell = get_neighbor_cell(cell_idx, dx, dy, dz, ncells)
+                        if neigh_cell < 0:
+                            continue
+                            
+                        # Check particles in this cell
+                        p = head[neigh_cell]
+                        while p >= 0:
+                            pos_diff = pos_new - pos_temp[p]
+                            
+                            # Apply PBC
+                            for k in range(3):
+                                if pos_diff[k] > box_lengths[k]/2:
+                                    pos_diff[k] -= box_lengths[k]
+                                elif pos_diff[k] < -box_lengths[k]/2:
+                                    pos_diff[k] += box_lengths[k]
+                            
+                            dist = np.sqrt(np.sum(pos_diff**2))
+                            if dist <= r_reject:
+                                reject = True
+                                break
+                            p = list_next[p]
+                        
+                        if reject:
+                            break
+                    if reject:
+                        break
+                if reject:
+                    break
+                    
+            if not reject:
+                # Accept position and add to cell list
+                pos_temp[i] = pos_new
+                list_next[i] = head[cell_idx]
+                head[cell_idx] = i
+                break
+                
+    return pos_temp
+
+def get_cell_index(pos: np.ndarray, cell_size: float, ncells: np.ndarray) -> int:
+    """
+    Convert a 3D position to a cell index in the acceleration grid.
+    
+    Parameters
+    ----------
+    pos : np.ndarray
+        3D position vector
+    cell_size : float
+        Size of each cell
+    ncells : np.ndarray
+        Number of cells in each dimension
+        
+    Returns
+    -------
+    int
+        Flattened cell index
+    """
+    idx = np.floor(pos / cell_size).astype(np.int32)
+    idx = np.minimum(idx, ncells - 1)
+    return idx[0] + idx[1]*ncells[0] + idx[2]*ncells[0]*ncells[1]
+
+def get_neighbor_cell(cell_idx: int, dx: int, dy: int, dz: int, ncells: np.ndarray) -> int:
+    """
+    Get the index of a neighboring cell, handling periodic boundary conditions.
+    
+    Parameters
+    ----------
+    cell_idx : int
+        Current cell index
+    dx, dy, dz : int
+        Relative cell coordinates (-1, 0, or 1)
+    ncells : np.ndarray
+        Number of cells in each dimension
+        
+    Returns
+    -------
+    int
+        Index of the neighboring cell
+    """
+    idx = cell_idx
+    x = idx % ncells[0]
+    idx = (idx - x) // ncells[0]
+    y = idx % ncells[1]
+    z = (idx - y) // ncells[1]
+    
+    x = (x + dx) % ncells[0]
+    y = (y + dy) % ncells[1]
+    z = (z + dz) % ncells[2]
+    
+    return x + y*ncells[0] + z*ncells[0]*ncells[1]
