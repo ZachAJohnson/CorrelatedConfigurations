@@ -2,7 +2,8 @@ import numpy as np
 
 
 class PeriodicConfigurationGenerator():
-    def __init__(self, L_cell, gofr_func, N_particles_per_subcell, N_subcells_per_dim, r_correlation = 3, perturb=True, δ_perturb = None, min_distance_δ =None):
+    def __init__(self, L_cell, gofr_func, N_particles_per_subcell, N_subcells_per_dim, r_correlation = 3, 
+                 dx_over_a = None, perturb=True, δ_perturb = None, min_distance_δ =None):
         """
         ConfigurationGenerator class to create a configuration of particles in a 3D periodic box.
         Parameters
@@ -17,6 +18,8 @@ class PeriodicConfigurationGenerator():
             Number of subcells in each dimension.
         r_correlation : float, optional
             Correlation length for the particles. Default is 3.
+        dx_over_a : float, optional
+            Distance between mesh points over the average a^3 N = L^3. If None, it is 0.1.
         perturb : bool, optional
             Whether to perturb the particles to remove perfect periodicity. Default is True.
         δ_perturb : float, optional
@@ -35,6 +38,12 @@ class PeriodicConfigurationGenerator():
         self.perturb = perturb
         self.δ_perturb  = δ_perturb
         self.min_distance_δ  = min_distance_δ
+        
+        # Set discretization
+        if dx_over_a is None:
+            dx_over_a = 0.1
+        a = self.L_subcell/(self.N_particles_per_subcell)**(1/3)
+        self.dx = dx_over_a*a    
         self.create_mesh()
         print(f"Creating subcells of length {self.L_subcell}. Distances beyond this have spurious correlations.")
         
@@ -56,7 +65,7 @@ class PeriodicConfigurationGenerator():
         r = np.linalg.norm(np.abs(x1-x2) -self.L_subcell*np.round(np.abs(x1-x2)/self.L_subcell),axis=0)
         return r
     
-    def create_mesh(self, dx=None):
+    def create_mesh(self):
         """
         Create a mesh grid for the entire domain.
         Parameters
@@ -64,15 +73,6 @@ class PeriodicConfigurationGenerator():
         dx : float, optional
             Distance between mesh points. If None, it will be calculated based on the number of particles per subcell.
         """
-        # Define number of cells
-
-        # Make grid compatible with these cells with approximate dx
-        if dx is None:
-            a = self.L_subcell/(self.N_particles_per_subcell)**(1/3)
-            self.dx = 0.1 * a
-        else:
-            self.dx = dx
-    
         # Mesh grids for the entire domain (could be adjusted to only create necessary subcell meshes)
         self.Nx = int(self.L_subcell/self.dx)
         self.x = np.linspace(0, self.L_subcell, self.Nx, endpoint=False)
