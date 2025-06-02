@@ -1,5 +1,146 @@
 import numpy as np
+import random
 
+class PeriodicConfigurationGenerator_MS:
+    def __init__(self, L_cell, gofr_funcs, N_particles_per_species_per_subcell, N_subcells_per_dim,
+                 r_correlation=3, dx_over_a=None, perturb=True,
+                 δ_perturb=None, min_distance_δ=None):
+        '''
+        Multi-species configuration generator in a periodic box.
+
+        Parameters
+        ----------
+        L_cell : float
+            Length of the full cell in each dimension.
+        gofr_funcs : list of list of callables
+            gofr_funcs[i][j](r) returns g_{ij}(r) for distance r.
+        N_particles_per_species_per_subcell : list of int
+            Number of particles of each species to place in each subcell.
+        N_subcells_per_dim : int
+            Number of subcells along each dimension.
+        r_correlation : float, optional
+            Correlation length (unused in this class but kept for compatibility).
+        dx_over_a : float, optional
+            Mesh spacing fraction; if None, defaults to 0.1.
+        perturb : bool, optional
+            Whether to apply a small random perturbation after placement.
+        δ_perturb : float, optional
+            Standard deviation of perturbation.
+        min_distance_δ : float, optional
+            Minimum allowed displacement per axis after perturbation.
+        '''
+        self.L_cell = L_cell
+        self.gofr_funcs = gofr_funcs
+        self.N_species = len(N_particles_per_species_per_subcell)
+        self.N_particles_per_species_per_subcell = N_particles_per_species_per_subcell
+        # total per subcell and full cell
+        self.N_particles_per_subcell = sum(N_particles_per_species_per_subcell)
+        self.N_subcells_per_dim = N_subcells_per_dim
+        self.N_subcells = N_subcells_per_dim**3
+        self.N_particles = self.N_particles_per_subcell * self.N_subcells
+        self.L_subcell = L_cell / N_subcells_per_dim
+        self.perturb = perturb
+        self.δ_perturb = δ_perturb
+        self.min_distance_δ = min_distance_δ
+
+        # set mesh spacing
+        if dx_over_a is None:
+            dx_over_a = 0.1
+        a = self.L_subcell / (self.N_particles_per_subcell)**(1/3)
+        self.dx = dx_over_a * a
+        self.create_mesh()
+
+        # build and shuffle species placement sequence
+        self.subcell_species = []
+        for s, count in enumerate(self.N_particles_per_species_per_subcell):
+            self.subcell_species += [s] * count
+        random.shuffle(self.subcell_species) 
+
+        print(f'Creating {self.N_species} species; subcell length {self.L_subcell}. Total particles/subcell: {self.N_particles_per_subcell}')
+
+    def periodic_distance(self, x1, x2):
+        x1, x2 = np.array(x1), np.array(x2)
+        diff = np.abs(x1 - x2) - self.L_subcell * np.round(np.abs(x1 - x2) / self.L_subcell)
+        r = np.linalg.norm(diff, axis=0)
+        return r
+
+    def create_mesh(self):
+        # determine grid resolution
+        self.Nx = int(self.L_subcell / self.dx)
+        self.x = np.linspace(0, self.L_subcell, self.Nx, endpoint=False)
+        self.y = np.linspace(0, self.L_subcell, self.Nx, endpoint=False)
+        self.z = np.linspace(0, self.L_subcell, self.Nx, endpoint=False)
+        self.X, self.Y, self.Z = np.meshgrid(self.x, self.y, self.z, indexing='ij')
+        # flattened list of all mesh points
+        self.XYZ_list = np.vstack([self.X.ravel(), self.Y.ravel(), self.Z.ravel()]).T
+        # one product mesh per species
+        self.G = np.ones((self.N_species, self.Nx, self.Nx, self.Nx))
+
+    def update_G_from_position(self, ion_position, species_id):
+        # compute distances to all grid points
+        r_mesh = self.periodic_distance(ion_position[:, None, None, None], np.array([self.X, self.Y, self.Z]))
+        # update each species' product mesh
+        for t in range(self.N_species):
+            gmesh = self.gofr_funcs[t][species_id](r_mesh)
+            self.G[t] *= gmesh
+
+    def get_random_new_position(self, species_id):
+        rng = np.random.default_rng()
+        flat = self.G[species_id].ravel()
+        p = flat / flat.sum()
+        pos = rng.choice(self.XYZ_list, p=p)
+        return pos
+
+    def fill_subcell_with_particles(self):
+        self.subcell_positions = []  # list of (pos, species_id)
+        idx = 0
+        while idx < len(self.subcell_species):
+            s = self.subcell_species[idx]
+            try:
+                pos = self.get_random_new_position(s)
+                self.update_G_from_position(pos, s)
+                self.subcell_positions.append((pos, s))
+                idx += 1
+            except ValueError:
+                print(f'ValueError placing species {s}: retrying')
+        # convert to array of objects
+        self.subcell_positions = np.array(self.subcell_positions, dtype=object)
+
+    def fill_cell_from_subcell(self):
+        # split positions and species
+        pos_arr = np.array([p for p, _ in self.subcell_positions])
+        sp_arr = np.array([s for _, s in self.subcell_positions])
+        # shifts for each subcell location
+        shifts = np.arange(self.N_subcells_per_dim) * self.L_subcell
+        shift_array = np.vstack(np.meshgrid(shifts, shifts, shifts, indexing='ij')).reshape(3, -1).T
+        # tile subcell into full cell
+        positions, species = [], []
+        for shift in shift_array:
+            for p, s in zip(pos_arr, sp_arr):
+                positions.append(p + shift)
+                species.append(s)
+        self.ion_positions = np.array(positions)
+        self.ion_species = np.array(species)
+        
+    def fill_cell_with_particles(self):
+        self.fill_subcell_with_particles()
+        self.fill_cell_from_subcell()
+        if self.perturb:
+            self.perturb_particles()
+
+    def perturb_particles(self):
+        if self.δ_perturb is None:
+            self.δ_perturb = self.dx / 4
+        if self.min_distance_δ is None:
+            self.min_distance_δ = self.dx / 2
+        if self.min_distance_δ > self.dx:
+            print('Warning: minimum distance > dx; setting to dx/2')
+            self.min_distance_δ = self.dx / 2
+        max_δ = (self.dx - self.min_distance_δ) / 2
+        δ = np.random.normal(-self.δ_perturb, self.δ_perturb, size=self.ion_positions.shape)
+        δ = np.clip(δ, -max_δ, max_δ)
+        self.ion_positions += δ
+        self.ion_positions = np.clip(self.ion_positions, 0, self.L_cell)
 
 class PeriodicConfigurationGenerator():
     def __init__(self, L_cell, gofr_func, N_particles_per_subcell, N_subcells_per_dim, r_correlation = 3, 

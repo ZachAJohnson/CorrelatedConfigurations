@@ -17,7 +17,7 @@ from .constants import *
 
 
 class Integral_Equation_Solver():
-    def __init__(self, N_species, Γ_matrix, number_densities_in_rs, temperature_in_AU_matrix, masses, dst_type=3, h_max=1e3, oz_method='standard',
+    def __init__(self, N_species, Γ_matrix, number_densities_in_rs, temperature_in_AU_matrix = None, masses = None, dst_type=3, h_max=1e3, oz_method='standard',
         kappa = None, kappa_multiscale = 1.0,  R_max=25.0, N_bins=512, names=None, closure='hnc', bridge=None):
 
         matrify = lambda numbers: np.array(numbers).reshape(N_species,N_species) 
@@ -26,20 +26,25 @@ class Integral_Equation_Solver():
         self.N_species = N_species
         self.Γ_matrix = matrify(Γ_matrix) 
         self.rho = vectorfy(number_densities_in_rs)
-        self.Temp_matrix = matrify(temperature_in_AU_matrix) #(self.mass_list[:,np.newaxis]*self.Temp_list[np.newaxis,:] + self.mass_list[np.newaxis,:]*self.Temp_list[:,np.newaxis])/(self.mass_list[:,np.newaxis] + self.mass_list[np.newaxis,:])
-        self.mass_list = vectorfy(masses)
         self.kappa_multiscale = kappa_multiscale
         self.R_max = R_max
         self.N_bins = N_bins
         self.dst_type = dst_type
         self.oz_method = oz_method
         self.h_max=h_max
-        self.Temp_list = np.diag(self.Temp_matrix)
-        self.mass_matrix = (self.mass_list[:,np.newaxis]*self.mass_list[np.newaxis,:])/(self.mass_list[:,np.newaxis] + self.mass_list[np.newaxis,:])
-        if kappa is None:
-            self.kappa = np.zeros_like(self.Γ_matrix)
-        else: 
-            self.kappa = matrify(kappa)
+
+        if oz_method == 'standard':
+            self.Temp_matrix = None #matrify(temperature_in_AU_matrix) #(self.mass_list[:,np.newaxis]*self.Temp_list[np.newaxis,:] + self.mass_list[np.newaxis,:]*self.Temp_list[:,np.newaxis])/(self.mass_list[:,np.newaxis] + self.mass_list[np.newaxis,:])
+            self.mass_list = None #vectorfy(masses)
+            self.Temp_list = None#np.diag(self.Temp_matrix)
+            self.mass_matrix = None#(self.mass_list[:,np.newaxis]*self.mass_list[np.newaxis,:])/(self.mass_list[:,np.newaxis] + self.mass_list[np.newaxis,:])
+        else:
+            self.Temp_matrix = matrify(temperature_in_AU_matrix) #(self.mass_list[:,np.newaxis]*self.Temp_list[np.newaxis,:] + self.mass_list[np.newaxis,:]*self.Temp_list[:,np.newaxis])/(self.mass_list[:,np.newaxis] + self.mass_list[np.newaxis,:])
+            self.mass_list = vectorfy(masses)
+            self.Temp_list = np.diag(self.Temp_matrix)
+            self.mass_matrix = (self.mass_list[:,np.newaxis]*self.mass_list[np.newaxis,:])/(self.mass_list[:,np.newaxis] + self.mass_list[np.newaxis,:])
+
+        self.kappa = kappa
         
         self.bridge = bridge # None, 'ocp' or 'yukawa'
 
@@ -140,7 +145,7 @@ class Integral_Equation_Solver():
         self.c_s_r_matrix = self.FT_k_2_r_matrix(self.c_s_k_matrix)
 
     def initialize_βu_Yukawa(self):
-        self.βu_Yukawa = self.Γ_matrix[:,:,np.newaxis]/self.r_array[np.newaxis, np.newaxis,:]*np.exp(- self.kappa[:,:,np.newaxis] * self.r_array[np.newaxis, np.newaxis,:])
+        self.βu_Yukawa = self.Γ_matrix[:,:,np.newaxis]/self.r_array[np.newaxis, np.newaxis,:]*np.exp(- self.kappa * self.r_array[np.newaxis, np.newaxis,:])
 
     def initialize_βu_matrix(self):
         # Initialize to a Yukawa potential as a default
@@ -619,8 +624,10 @@ class Integral_Equation_Solver():
         converged = 1
         decreasing = True
         iteration = 1
+        actual_tot_err = 1
+        started_Ng=False
         self.h_r_matrix_list, self.c_s_k_matrix_list = [], []
-        self.u_ex_list = []
+        # self.u_ex_list = []
         self.h_r_matrix_list.append(self.h_r_matrix.copy())            
         self.c_s_k_matrix_list.append(self.c_s_k_matrix.copy())
         initial_error = self.total_err(self.c_s_k_matrix)
@@ -628,18 +635,19 @@ class Integral_Equation_Solver():
         self.tot_err_list, self.hnc_err_list  = [initial_error], [0]
         while converged!=0:
             old_c_s_k_matrix = self.c_s_k_matrix.copy()
-            if iteration < iters_to_wait: #Picard at first
+            if iteration < iters_to_wait and actual_tot_err>0.1 and started_Ng==False: #Picard at first
                 guess_c_s_k_matrix = self.guess_c_s_k_matrix(self.c_s_k_matrix)
                 self.c_s_k_matrix = self.Picard_c_s_k(self.c_s_k_matrix, guess_c_s_k_matrix, alpha=alpha_Picard )
-            elif iteration == iters_to_wait:
+            elif started_Ng == False:
                 best_run_index = np.argmin(self.tot_err_list)
                 self.c_s_k_matrix = self.c_s_k_matrix_list[best_run_index]
                 print("Starting Ng loop, using best index so far: ", best_run_index)
                 self.h_r_matrix_list = self.h_r_matrix_list[:best_run_index]
                 self.c_s_k_matrix_list = self.c_s_k_matrix_list[:best_run_index]
-                self.u_ex_list = self.u_ex_list[:best_run_index]
+                # self.u_ex_list = self.u_ex_list[:best_run_index]
                 self.tot_err_list = self.tot_err_list[:best_run_index]
                 iteration+=1
+                started_Ng=True
                 continue
             else:
                 self.c_s_k_matrix = self.Ng_c_s_k(num_to_use=iters_to_use, alpha = alpha_Ng)
@@ -650,8 +658,8 @@ class Integral_Equation_Solver():
             self.c_s_k_matrix_list.append(self.c_s_k_matrix.copy())
             
             err_c = np.linalg.norm(old_c_s_k_matrix - self.c_s_k_matrix) / np.sqrt(self.N_bins*self.N_species**2)
-            u_ex = self.excess_energy_density()
-            self.u_ex_list.append(u_ex)
+            # u_ex = self.excess_energy_density()
+            # self.u_ex_list.append(u_ex)
 
             hnc_err = np.linalg.norm(- 1 - self.h_r_matrix   + np.exp( -self.βu_r_matrix + self.h_r_matrix - self.c_r_matrix ))/np.sqrt(self.N_bins*self.N_species**2)
             actual_tot_err = self.total_err(self.c_s_k_matrix)
@@ -703,7 +711,7 @@ class Integral_Equation_Solver():
         
         self.h_r_matrix_list = self.h_r_matrix_list[:best_run_index+1]
         self.c_s_k_matrix_list = self.c_s_k_matrix_list[:best_run_index+1]
-        self.u_ex_list = self.u_ex_list[:best_run_index+1]
+        # self.u_ex_list = self.u_ex_list[:best_run_index+1]
         self.tot_err_list = self.tot_err_list[:best_run_index+1]
 
         print("Exiting status {0}, reverting to best index so far: {1}".format(converged, best_run_index))
