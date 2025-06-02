@@ -92,7 +92,7 @@ class PeriodicConfigurationGenerator():
         """
         ion_position = np.array(ion_position)
         r_mesh = self.periodic_distance(ion_position[:, np.newaxis, np.newaxis, np.newaxis], np.array([self.X,self.Y,self.Z]) )
-        g_mesh = self.gofr_func(r_mesh)
+        g_mesh = self.gofr_func(r_mesh) 
         self.G *= g_mesh
         
     def get_random_new_position(self):
@@ -129,14 +129,21 @@ class PeriodicConfigurationGenerator():
     def fill_subcell_with_particles(self):
         self.subcell_ion_positions = []
         N_particles_placed = 0
+        fails = 0
+        max_fail = 10
         while N_particles_placed < self.N_particles_per_subcell:
             try:                 
                 ion_position = self.get_random_new_position()
                 self.update_G_from_position(ion_position)
                 self.subcell_ion_positions.append(ion_position)
                 N_particles_placed += 1
+                fails = 0
             except ValueError as err:
+                fails+=1
                 print("ValueError: err. Retrying placement.") 
+            if fails>max_fail:
+                print("Failed to place particle {fails} times. Breaking.")
+                break
         self.subcell_ion_positions = np.array(self.subcell_ion_positions) 
     
     
